@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create an integrated Amazon Step Functions workflow for end-to-end QC-AFQMC execution.
+
+Parameters:
+  BatchJobQueueArn:
+    Type: String
+
+  BatchJobDefinitionArn:
+    Type: String
+
+  DataBucket:
+    Type: String
+
+  LambdaFunctionImageUri:
+    Type: String
+
+Resources:
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    # checkov:skip=CKV_AWS_115:Invoked once per workflow execution by Step Functions; reserving concurrency would only carve capacity out of the reader's account-wide pool.
+    # checkov:skip=CKV_AWS_116:Invoked synchronously by Step Functions (lambda:invoke). A DLQ only applies to asynchronous invocations; failures surface as a failed state in the execution.
+    # checkov:skip=CKV_AWS_117:The function exposes no network endpoint and only calls Amazon S3 with an IAM role scoped to the data bucket; VPC attachment adds ENIs and NAT dependency without protecting the reader.
+    # checkov:skip=CKV_AWS_173:The only environment variable is the (non-secret) data bucket name; Lambda encrypts environment variables at rest with an AWS managed key by default.
+    Properties:
+      FunctionName: Braket-Batch-Demo-Workflow-LambdaFunction
+      PackageType: Image
+      Code:
+        ImageUri: !Sub ${LambdaFunctionImageUri}:latest
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 900
+      Role: !ImportValue BraketBatchWorkflowLambdaRoleArn
+      Environment:
+        Variables:
+          DATA_BUCKET_NAME: !Ref DataBucket
+
+  HybridWorkflowOrchestration:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !ImportValue BraketBatchWorkflowRoleArn
+      Definition:
+        QueryLanguage: JSONata
+        TimeoutSeconds: 28800
+        StartAt: PassHyperparameters
+        States:
+          PassHyperparameters:
+            Type: Pass
+            Assign:
+              BatchChildJobs: "{% $states.input.child_jobs %}"
+              BatchDeltaTau: "{% $states.input.delta_tau %}"
+              BatchTimeSteps: "{% $states.input.time_steps %}"
+              BraketOutputPrefix: "{% 'braket/lab-3-qc-afqmc-matchgate-circuits/' & $states.input.braket_job_timestamp %}"
+              BraketShadowSize: "{% $states.input.shadow_size %}"
+              BraketShots: "{% $states.input.shots %}"
+              BraketDevice: "{% $states.input.quantum_device %}"
+            Next: QuantumSampling
+          QuantumSampling:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:braket:createJob.waitForTaskToken
+            Arguments:
+              AlgorithmSpecification:
+                ScriptModeConfig:
+                  EntryPoint: afqmc.collect_shadows:main
+                  S3Uri: !Sub s3://${DataBucket}/afqmc.tar.gz
+                  CompressionType: GZIP
+              ClientToken: "{% $states.context.Execution.Name %}"
+              DeviceConfig:
+                Device: "{% $BraketDevice %}"
+              HyperParameters:
+                TaskToken: "{% $states.context.Task.Token %}"
+                ShadowSize: "{% $BraketShadowSize %}"
+                Shots: "{% $BraketShots %}"
+              InstanceConfig:
+                InstanceType: ml.m5.large
+                InstanceCount: 1
+                VolumeSizeInGb: 30
+              JobName: lab-3-afqmc-matchgate-circuits
+              RoleArn: !ImportValue BraketJobsExecutionRoleArn
+              OutputDataConfig:
+                S3Path: !Sub "{% 's3://${DataBucket}/' & $BraketOutputPrefix %}"
+            Output:
+              S3Key: !Sub "{% $BraketOutputPrefix & '/output/model.tar.gz' %}"
+            Next: PostProcessing
+          PostProcessing:
+            Type: Task
+            Resource: arn:aws:states:::batch:submitJob.sync
+            Arguments:
+              JobName: lab-3-afqmc-postprocessing
+              JobQueue: !Ref BatchJobQueueArn
+              JobDefinition: !Ref BatchJobDefinitionArn
+              ArrayProperties:
+                Size: "{% $BatchChildJobs %}"
+              Parameters:
+                entry_point: qc_afqmc
+                delta_tau: "{% $BatchDeltaTau %}"
+                time_steps: "{% $BatchTimeSteps %}"
+                input_file_key: "{% $states.input.S3Key %}"
+            Next: DataCollection
+          DataCollection:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Arguments:
+              FunctionName: !GetAtt LambdaFunction.Arn
+              Payload:
+                BatchJobId: "{% $states.input.JobId %}"
+                BatchJobArraySize: "{% $states.input.ArrayProperties.Size %}"
+            End: true
+
+Outputs:
+  StateMachineArn:
+    Value: !GetAtt HybridWorkflowOrchestration.Arn

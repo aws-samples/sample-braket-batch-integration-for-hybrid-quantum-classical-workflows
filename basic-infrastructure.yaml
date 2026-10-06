@@ -1,0 +1,701 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploy the Braket Notebook Instance, VPC and other basic resources for the AFQMC labs
+
+Resources:
+  BraketNotebookInstance:
+    Type: AWS::SageMaker::NotebookInstance
+    # checkov:skip=CKV_AWS_187:Sample/tutorial notebook; volume already encrypted at rest with the AWS-managed key. A CMK is production key-governance that adds cost and teardown friction with no reader benefit for ephemeral demo infra.
+    Properties:
+      InstanceType: ml.t3.xlarge
+      PlatformIdentifier: notebook-al2023-v1
+      InstanceMetadataServiceConfiguration:
+        MinimumInstanceMetadataServiceVersion: "2"
+      LifecycleConfigName: !GetAtt NotebookInstanceLifecycleConfig.NotebookInstanceLifecycleConfigName
+      NotebookInstanceName: amazon-braket-afqmc-labs
+      RoleArn: !GetAtt NotebookRole.Arn
+      VolumeSizeInGB: 25
+
+  NotebookRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - sagemaker.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: NotebookTutorialPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              # Hybrid jobs and quantum tasks can only target the SV1 simulator. CreateJob and CreateQuantumTask are authorized against both the device and the new job/task ARN.
+              - Sid: BraketCreateOnSV1
+                Effect: Allow
+                Action:
+                  - braket:CreateJob
+                  - braket:CreateQuantumTask
+                Resource:
+                  - !Sub arn:${AWS::Partition}:braket:*:*:device/quantum-simulator/amazon/sv1
+                  - !Sub arn:${AWS::Partition}:braket:${AWS::Region}:${AWS::AccountId}:job/*
+                  - !Sub arn:${AWS::Partition}:braket:${AWS::Region}:${AWS::AccountId}:quantum-task/*
+              - Sid: BraketManageJobsAndTasks
+                Effect: Allow
+                Action:
+                  - braket:CancelJob
+                  - braket:GetJob
+                  - braket:CancelQuantumTask
+                  - braket:GetQuantumTask
+                Resource:
+                  - !Sub arn:${AWS::Partition}:braket:${AWS::Region}:${AWS::AccountId}:job/*
+                  - !Sub arn:${AWS::Partition}:braket:${AWS::Region}:${AWS::AccountId}:quantum-task/*
+              - Sid: BraketGetDevice
+                Effect: Allow
+                Action:
+                  - braket:GetDevice
+                Resource:
+                  - !Sub arn:${AWS::Partition}:braket:*:*:device/*
+              - Sid: BraketSearch
+                Effect: Allow
+                Action:
+                  - braket:SearchJobs
+                  - braket:SearchQuantumTasks
+                  - braket:SearchDevices
+                Resource: "*"
+              - Sid: BatchSubmitAndTerminate
+                Effect: Allow
+                Action:
+                  - batch:SubmitJob
+                  - batch:TerminateJob
+                Resource:
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-queue/BatchJobQueue-*
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/BatchJobDefinition-*
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*
+              - Sid: BatchManageEnvironment
+                Effect: Allow
+                Action:
+                  - batch:CreateComputeEnvironment
+                  - batch:UpdateComputeEnvironment
+                  - batch:DeleteComputeEnvironment
+                  - batch:CreateJobQueue
+                  - batch:UpdateJobQueue
+                  - batch:DeleteJobQueue
+                  - batch:RegisterJobDefinition
+                  - batch:DeregisterJobDefinition
+                  - batch:TagResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:compute-environment/BatchComputeEnvironment-*
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-queue/BatchJobQueue-*
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/BatchJobDefinition-*
+              - Sid: BatchDescribe
+                Effect: Allow
+                Action:
+                  - batch:DescribeJobs
+                  - batch:DescribeJobQueues
+                  - batch:DescribeJobDefinitions
+                  - batch:DescribeComputeEnvironments
+                  - batch:ListJobs
+                Resource: "*"
+              - Sid: StepFunctionsExecute
+                Effect: Allow
+                Action:
+                  - states:CreateStateMachine
+                  - states:UpdateStateMachine
+                  - states:DeleteStateMachine
+                  - states:TagResource
+                  - states:StartExecution
+                  - states:DescribeExecution
+                  - states:StopExecution
+                  - states:ListExecutions
+                  - states:DescribeStateMachine
+                Resource:
+                  - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:HybridWorkflowOrchestration-*
+                  - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:HybridWorkflowOrchestration-*
+              - Sid: CloudFormationTutorialStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/batch-environment/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/braket-batch-workflow/*
+              - Sid: EcrPushPull
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrRepositoryScoped
+                Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:SetRepositoryPolicy
+                  - ecr:GetRepositoryPolicy
+                  - ecr:TagResource
+                  - ecr:ListTagsForResource
+                  - ecr:PutImageScanningConfiguration
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/amazon-braket-batch-tutorial-*
+              - Sid: DataBucketAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-${AWS::AccountId}-${AWS::Region}
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-${AWS::AccountId}-${AWS::Region}/*
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-${AWS::Region}-${AWS::AccountId}
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-${AWS::Region}-${AWS::AccountId}/*
+              - Sid: DataBucketManage
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-${AWS::AccountId}-${AWS::Region}
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-${AWS::Region}-${AWS::AccountId}
+              - Sid: DataBucketPolicyManage
+                Effect: Allow
+                Action:
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-${AWS::AccountId}-${AWS::Region}
+              - Sid: LambdaManageAndInvoke
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:InvokeFunction
+                  - lambda:TagResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:Braket-Batch-Demo-Workflow*
+              - Sid: NotebookCloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/NotebookInstances:*
+              - Sid: ListServiceRoles
+                Effect: Allow
+                Action:
+                  - iam:ListRoles
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/*
+              - Sid: ServiceLinkedRoleForBatch
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: batch.amazonaws.com
+        - PolicyName: PassRoles
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/service-role/AmazonBraketJobsExecutionRole
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch
+                  - !GetAtt BatchInstanceRole.Arn
+                  - !GetAtt BatchJobRole.Arn
+                  - !GetAtt BraketJobsExecutionRole.Arn
+                  - !GetAtt LambdaExecutionRole.Arn
+                  - !GetAtt HybridWorkflowExecutionRole.Arn
+
+
+  NotebookInstanceLifecycleConfig:
+    Type: AWS::SageMaker::NotebookInstanceLifecycleConfig
+    Properties:
+      NotebookInstanceLifecycleConfigName: afqmc-labs
+      OnStart:
+        - Content:
+            Fn::Base64: |
+              #!/usr/bin/env bash
+
+              echo "Set up Amazon Braket NBI"
+              sudo -u ec2-user -i <<EOS
+              if [ -b /dev/nvme0n1 ]; then
+                sudo blockdev --setra 4096 /dev/nvme0n1
+              fi
+              curl -o braket-notebook-lcc.zip https://d3ded4lzb1lnme.cloudfront.net/notebook/braket-notebook-lcc.zip
+              unzip braket-notebook-lcc.zip
+              ./install.sh
+              EOS
+              
+              echo "Clone the sample code"
+              sudo -u ec2-user -i <<EOS
+              cd /home/ec2-user/SageMaker
+              git clone https://github.com/aws-samples/sample-braket-batch-integration-for-hybrid-quantum-classical-workflows.git AFQMC-labs
+              cd /home/ec2-user/SageMaker/AFQMC-labs
+              sh ./pull_afqmc_code.sh
+              EOS
+              
+              exit 0
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: hpc-vpc
+
+  VpcFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref Vpc
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Sub ${AWS::StackName}-VPC-FlowLogs
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
+
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - vpc-flow-logs.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: FlowLogPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${AWS::StackName}-VPC-FlowLogs:*
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: hpc-igw
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  SubnetPublic:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: hpc-public-subnet
+
+  SubnetPrivate:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: hpc-private-subnet
+
+  NatElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: hpc-nat-eip
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatElasticIP.AllocationId
+      SubnetId: !Ref SubnetPublic
+      Tags:
+        - Key: Name
+          Value: hpc-natgw
+
+  RouteTablePrivate:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: hpc-route-table-private
+
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: hpc-route-table-public
+
+  RouteAssociationPrivate:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref SubnetPrivate
+
+  RouteAssociationPublic:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref SubnetPublic
+
+  DefaultRoutePublic:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTablePublic
+
+  DefaultRoutePrivate:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+      RouteTableId: !Ref RouteTablePrivate
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      RouteTableIds:
+        - !Ref RouteTablePublic
+        - !Ref RouteTablePrivate
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: hpc-s3-endpoint
+
+  BraketEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.braket
+      VpcId: !Ref Vpc
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref SubnetPrivate
+      SecurityGroupIds:
+        - !Ref DefaultSecurityGroup
+      Tags:
+        - Key: Name
+          Value: hpc-braket-endpoint
+
+  DefaultSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from resources in VPC
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: Allow all outbound to world
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: hpc-default-secgroup
+
+  ClusterAllowAllInboundFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow all inbound from self
+      GroupId: !Ref DefaultSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref DefaultSecurityGroup
+
+  ClusterAllowAllOutboundToSelf:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow all outbound to self
+      GroupId: !Ref DefaultSecurityGroup
+      IpProtocol: -1
+      DestinationSecurityGroupId: !Ref DefaultSecurityGroup
+
+  BatchInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: BatchInstanceRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+      # The instance role only serves the ECS agent on the Batch compute nodes (register the container instance, pull images from ECR, ship container logs).
+      # Job code runs under BatchJobRole (JobRoleArn on the job definition), so this role has no S3 or Braket access.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+      Policies:
+        - PolicyName: BatchJobLogging
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/batch/job:*
+
+  BatchInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: BatchInstanceProfile
+      Roles:
+        - !Ref BatchInstanceRole
+
+  # Credentials for the Batch job containers (collect_local_energies.py). The container only downloads the shadow archive from and uploads walker results to the data bucket.
+  BatchJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: DataBucketAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-${AWS::AccountId}-${AWS::Region}/*
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DataBucketPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-*/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-*
+
+  BraketJobsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: braket.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonBraketJobsExecutionPolicy
+      Policies:
+        # The managed policy allows braket:CreateQuantumTask on any device. This explicit Deny
+        # overrides it, so hybrid jobs started by the workflow can only run quantum tasks on the
+        # SV1 simulator. CreateQuantumTask is also authorized against the new task's ARN, so the
+        # quantum-task ARN pattern is excluded from the Deny.
+        - PolicyName: RestrictQuantumTasksToSV1
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: DenyQuantumTasksOutsideSV1
+                Effect: Deny
+                Action:
+                  - braket:CreateQuantumTask
+                NotResource:
+                  - !Sub arn:${AWS::Partition}:braket:*:*:device/quantum-simulator/amazon/sv1
+                  - !Sub arn:${AWS::Partition}:braket:${AWS::Region}:${AWS::AccountId}:quantum-task/*
+        - PolicyName: StepFunctionsServiceIntegration
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:SendTaskSuccess
+                  - states:SendTaskFailure
+                Resource: "*"
+        - PolicyName: DataBucketPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-*/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::amazon-braket-batch-tutorial-*
+
+  HybridWorkflowExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+      Policies:
+        - PolicyName: BatchPipelineExecution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - batch:SubmitJob
+                  - batch:TerminateJob
+                Resource:
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-queue/BatchJobQueue-*
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job-definition/BatchJobDefinition-*
+                  - !Sub arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:job/*
+              - Effect: Allow
+                # Polled by the .sync integration; no resource-level permissions.
+                Action:
+                  - batch:DescribeJobs
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource:
+                  - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForBatchJobsRule
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Braket-Batch-Demo-Workflow*
+              - Effect: Allow
+                Action:
+                  - braket:CreateJob
+                Resource:
+                  - !Sub arn:${AWS::Partition}:braket:*:*:device/quantum-simulator/amazon/sv1
+                  - !Sub arn:${AWS::Partition}:braket:${AWS::Region}:${AWS::AccountId}:job/*
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt BraketJobsExecutionRole.Arn
+
+Outputs:
+  VpcId:
+    Value: !GetAtt Vpc.VpcId
+    Export:
+      Name: HpcVpcId
+  PublicSubnetId:
+    Value: !GetAtt SubnetPublic.SubnetId
+    Export:
+      Name: HpcPublicSubnetId
+  PrivateSubnetId:
+    Value: !GetAtt SubnetPrivate.SubnetId
+    Export:
+      Name: HpcPrivateSubnetId
+  DefaultSecurityGroupId:
+    Value: !GetAtt DefaultSecurityGroup.GroupId
+    Export:
+      Name: HpcDefaultSecurityGroupId
+  BatchInstanceProfileArn:
+    Value: !GetAtt BatchInstanceProfile.Arn
+    Export:
+      Name: BatchInstanceProfileArn
+  BatchJobRoleArn:
+    Value: !GetAtt BatchJobRole.Arn
+    Export:
+      Name: BatchJobRoleArn
+  BraketJobsExecutionRoleArn:
+    Value: !GetAtt BraketJobsExecutionRole.Arn
+    Export:
+      Name: BraketJobsExecutionRoleArn
+  BraketBatchWorkflowRoleArn:
+    Value: !GetAtt HybridWorkflowExecutionRole.Arn
+    Export:
+      Name: BraketBatchWorkflowRoleArn
+  BraketBatchWorkflowLambdaRoleArn:
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: BraketBatchWorkflowLambdaRoleArn

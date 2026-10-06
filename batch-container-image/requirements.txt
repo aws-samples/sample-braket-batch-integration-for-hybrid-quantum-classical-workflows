@@ -1,0 +1,11 @@
+boto3
+amazon-braket-sdk
+numpy
+numba
+pennylane>=0.45.1,<0.46
+pennylane-lightning>=0.45,<0.46
+amazon-braket-pennylane-plugin
+pyscf
+openfermion
+openfermionpyscf
+matplotlib

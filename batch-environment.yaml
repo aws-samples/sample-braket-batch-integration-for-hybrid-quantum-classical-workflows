@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Launch an AWS Batch environment for AFQCM imaginary time evolution.
+
+Parameters:
+  JobDefResourceMemory:
+    Type: String
+    Default: '1024'
+  JobDefResourceVCPU:
+    Type: String
+    Default: '2'
+    Description: 'Number of vCPUs per walker propagation. Recommended value is 2.'
+  MaxVCPUs:
+    Type: Number
+    Default: 2000
+  MinVCPUs:
+    Type: Number
+    Default: 0
+
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    # checkov:skip=CKV_AWS_18:Sample/tutorial bucket holds only reproducible, non-sensitive output; access logging is a production forensic control not warranted for ephemeral demo infra.
+    # checkov:skip=CKV_AWS_21:Sample/tutorial output is fully reproducible by re-running the job; versioning adds teardown friction (versioned objects block bucket deletion) with no reader benefit.
+    Properties:
+      BucketName: !Sub amazon-braket-batch-tutorial-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub ${DataBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  BatchImageRepository:
+    Type: AWS::ECR::Repository
+    # checkov:skip=CKV_AWS_51:The labs rebuild and re-push the container image under the same tag while readers iterate on the code; immutable tags would make every re-push fail. The repository is private to the reader's account and scanned on push.
+    Properties:
+      RepositoryName: amazon-braket-batch-tutorial-batch
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: KMS
+
+  LambdaImageRepository:
+    Type: AWS::ECR::Repository
+    # checkov:skip=CKV_AWS_51:The labs rebuild and re-push the container image under the same tag while readers iterate on the code; immutable tags would make every re-push fail. The repository is private to the reader's account and scanned on push.
+    Properties:
+      RepositoryName: amazon-braket-batch-tutorial-lambda
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: KMS
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LambdaECRImageRetrievalPolicy
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeResources:
+        AllocationStrategy: BEST_FIT_PROGRESSIVE
+        UpdateToLatestImageVersion: true
+        MaxvCpus: !Ref MaxVCPUs # WS account limit: 256
+        MinvCpus: !Ref MinVCPUs
+        SecurityGroupIds:
+          - !ImportValue HpcDefaultSecurityGroupId
+        Type: EC2
+        Subnets:
+          - !ImportValue HpcPrivateSubnetId
+        InstanceRole: !ImportValue BatchInstanceProfileArn
+        InstanceTypes:
+          - optimal
+        Tags:
+          auto-delete: "no"
+      ReplaceComputeEnvironment: true
+      ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch
+      State: ENABLED
+      Type: MANAGED
+      Tags:
+        auto-delete: "no"
+
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      ComputeEnvironmentOrder:
+        - ComputeEnvironment: !Ref BatchComputeEnvironment
+          Order: 1
+      Priority: 1
+      State: ENABLED
+
+  BatchJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      Parameters:
+       entry_point: None
+       delta_tau: None
+       time_steps: None
+       input_file_key: None
+      ContainerProperties:
+        Image: !Sub ${BatchImageRepository.RepositoryUri}:latest
+        JobRoleArn: !ImportValue BatchJobRoleArn
+        Command:
+          - "python"
+          - "collect_local_energies.py"
+          - "Ref::entry_point"
+          - "Ref::delta_tau"
+          - "Ref::time_steps"
+          - "Ref::input_file_key"
+        ResourceRequirements:
+          - Type: MEMORY
+            Value: !Ref JobDefResourceMemory
+          - Type: VCPU
+            Value: !Ref JobDefResourceVCPU
+        Environment:
+          - Name: JOB_S3_BUCKET_NAME
+            Value: !Ref DataBucket
+          - Name: JOB_OUTPUT_FILE_NAME
+            Value: results.json
+
+Outputs:
+  DataBucketName:
+    Value: !Ref DataBucket
+  BatchImageRepositoryUri:
+    Value: !GetAtt BatchImageRepository.RepositoryUri
+  LambdaImageRepositoryUri:
+    Value: !GetAtt LambdaImageRepository.RepositoryUri
+  JobQueue:
+    Value: !Ref BatchJobQueue
+  JobDefinition:
+    Value: !Ref BatchJobDefinition
