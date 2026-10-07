@@ -42,7 +42,7 @@ We recommend you use the [AWS region](https://docs.aws.amazon.com/global-infrast
 ## Basic Setup
 
 Before you can start with the actual labs, you have to prepare basic infrastructure in your AWS account.
-Log in to your account, go to the [AWS CloudFormation management console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks) and create a stack from the template `basic-infrastructure.yaml`. We recommend you name the stack "AFQMC-labs-infrastructure".
+Log in to your account, go to the [AWS CloudFormation management console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks) and create a stack from the template `basic-infrastructure.yaml`. **Name the stack `AFQMC-labs-infrastructure`.**
 
 Review the AWS CloudFormation user guide to learn how to [create a stack from the CloudFormation console](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stack.html).
 
